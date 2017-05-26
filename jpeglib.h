@@ -1000,6 +1000,10 @@ EXTERN(boolean) jpeg_finish_decompress (j_decompress_ptr cinfo);
 /* Replaces jpeg_read_scanlines when reading raw downsampled data. */
 EXTERN(JDIMENSION) jpeg_read_raw_data (j_decompress_ptr cinfo, JSAMPIMAGE data,
                                        JDIMENSION max_lines);
+EXTERN(JDIMENSION) jpeg_read_raw_data_flag_arr JPP((j_decompress_ptr cinfo,
+                                          JSAMPIMAGE data,
+                                          JDIMENSION max_lines, unsigned char* flag_arr));
+
 
 /* Additional entry points for buffered-image mode. */
 EXTERN(boolean) jpeg_has_multiple_scans (j_decompress_ptr cinfo);

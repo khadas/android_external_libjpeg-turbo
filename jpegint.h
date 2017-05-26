@@ -185,6 +185,8 @@ struct jpeg_d_coef_controller {
   int (*consume_data) (j_decompress_ptr cinfo);
   void (*start_output_pass) (j_decompress_ptr cinfo);
   int (*decompress_data) (j_decompress_ptr cinfo, JSAMPIMAGE output_buf);
+  JMETHOD(int, decompress_data_flag_arr, (j_decompress_ptr cinfo,
+                               JSAMPIMAGE output_buf, unsigned char * flag_arr, JDIMENSION output_scanline));
   /* Pointer to array of coefficient virtual arrays, or NULL if none */
   jvirt_barray_ptr *coef_arrays;
 };
@@ -223,6 +225,8 @@ struct jpeg_marker_reader {
 struct jpeg_entropy_decoder {
   void (*start_pass) (j_decompress_ptr cinfo);
   boolean (*decode_mcu) (j_decompress_ptr cinfo, JBLOCKROW *MCU_data);
+  JMETHOD(boolean, decode_mcu_flag, (j_decompress_ptr cinfo,
+                               JBLOCKROW *MCU_data));
 
   /* This is here to share code between baseline and progressive decoders; */
   /* other modules probably should not use it */

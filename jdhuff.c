@@ -549,6 +549,40 @@ process_restart (j_decompress_ptr cinfo)
   return TRUE;
 }
 
+LOCAL(boolean)
+process_restart_flag (j_decompress_ptr cinfo)
+{
+  huff_entropy_ptr entropy = (huff_entropy_ptr) cinfo->entropy;
+  //int ci;
+
+  /* Throw away any unused bits remaining in bit buffer; */
+  /* include any full bytes in next_marker's count of discarded bytes */
+  //cinfo->marker->discarded_bytes += entropy->bitstate.bits_left / 8;
+  //entropy->bitstate.bits_left = 0;
+
+  /* Advance past the RSTn marker */
+  if (! (*cinfo->marker->read_restart_marker) (cinfo))
+    return FALSE;
+
+  /* Re-initialize DC predictions to 0 */
+  //for (ci = 0; ci < cinfo->comps_in_scan; ci++)
+  //  entropy->saved.last_dc_val[ci] = 0;
+
+  /* Reset restart counter */
+  entropy->restarts_to_go = cinfo->restart_interval;
+
+  /* Reset out-of-data flag, unless read_restart_marker left us smack up
+   * against a marker.  In that case we will end up treating the next data
+   * segment as empty, and we can avoid producing bogus output pixels by
+   * leaving the flag set.
+   */
+  //if (cinfo->unread_marker == 0)
+  //  entropy->pub.insufficient_data = FALSE;
+
+  return TRUE;
+}
+
+
 
 LOCAL(boolean)
 decode_mcu_slow (j_decompress_ptr cinfo, JBLOCKROW *MCU_data)
@@ -790,6 +824,121 @@ decode_mcu (j_decompress_ptr cinfo, JBLOCKROW *MCU_data)
   return TRUE;
 }
 
+METHODDEF(boolean)
+decode_mcu_flag (j_decompress_ptr cinfo, JBLOCKROW *MCU_data)
+{
+  BITREAD_STATE_VARS;
+  int blkn;
+  savable_state state;
+  huff_entropy_ptr entropy = (huff_entropy_ptr) cinfo->entropy;
+
+  if (cinfo->restart_interval) {
+    if (entropy->restarts_to_go == 0) {
+      if (! process_restart_flag(cinfo)) {
+       return FALSE;
+      }
+    }
+  } else {
+
+      if (! entropy->pub.insufficient_data) {
+        /* Load up working state */
+        BITREAD_LOAD_STATE(cinfo,entropy->bitstate);
+        ASSIGN_STATE(state, entropy->saved);
+
+        /* Outer loop handles each block in the MCU */
+
+        for (blkn = 0; blkn < cinfo->blocks_in_MCU; blkn++) {
+          JBLOCKROW block = MCU_data[blkn];
+          d_derived_tbl * dctbl = entropy->dc_cur_tbls[blkn];
+          d_derived_tbl * actbl = entropy->ac_cur_tbls[blkn];
+          register int s, k, r;
+
+          /* Decode a single block's worth of coefficients */
+
+          /* Section F.2.2.1: decode the DC coefficient difference */
+          HUFF_DECODE(s, br_state, dctbl, return FALSE, label1);
+          if (s) {
+            CHECK_BIT_BUFFER(br_state, s, return FALSE);
+            r = GET_BITS(s);
+            s = HUFF_EXTEND(r, s);
+          }
+
+          if (entropy->dc_needed[blkn]) {
+            /* Convert DC difference to actual value, update last_dc_val */
+            int ci = cinfo->MCU_membership[blkn];
+            s += state.last_dc_val[ci];
+            state.last_dc_val[ci] = s;
+            /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
+            (*block)[0] = (JCOEF) s;
+          }
+
+          if (entropy->ac_needed[blkn]) {
+
+            /* Section F.2.2.2: decode the AC coefficients */
+            /* Since zeroes are skipped, output area must be cleared beforehand */
+            for (k = 1; k < DCTSIZE2; k++) {
+              HUFF_DECODE(s, br_state, actbl, return FALSE, label2);
+
+              r = s >> 4;
+              s &= 15;
+
+              if (s) {
+                k += r;
+                //CHECK_BIT_BUFFER(br_state, s, return FALSE);
+                r = GET_BITS(s);
+                //s = HUFF_EXTEND(r, s);
+                /* Output coefficient in natural (dezigzagged) order.
+                 * Note: the extra entries in jpeg_natural_order[] will save us
+                 * if k >= DCTSIZE2, which could happen if the data is corrupted.
+                 */
+                (*block)[jpeg_natural_order[k]] = (JCOEF) s;
+              } else {
+                if (r != 15)
+                  break;
+                k += 15;
+              }
+            }
+
+          } else {
+
+            /* Section F.2.2.2: decode the AC coefficients */
+            /* In this path we just discard the values */
+            for (k = 1; k < DCTSIZE2; k++) {
+              HUFF_DECODE(s, br_state, actbl, return FALSE, label3);
+
+              r = s >> 4;
+              s &= 15;
+
+              if (s) {
+                k += r;
+                //CHECK_BIT_BUFFER(br_state, s, return FALSE);
+                DROP_BITS(s);
+              } else {
+                if (r != 15)
+                  break;
+                k += 15;
+              }
+            }
+
+          }
+        }
+
+
+        /* Completed MCU, so update state */
+        BITREAD_SAVE_STATE(cinfo,entropy->bitstate);
+        ASSIGN_STATE(entropy->saved, state);
+      }
+  }
+
+  /* If we've run out of data, just leave the MCU set to zeroes.
+   * This way, we return uniform gray for the remainder of the segment.
+   */
+  entropy->restarts_to_go--;
+  return TRUE;
+}
+
+
+
 
 /*
  * Module initialization routine for Huffman entropy decoding.
@@ -813,6 +962,7 @@ jinit_huff_decoder (j_decompress_ptr cinfo)
   cinfo->entropy = (struct jpeg_entropy_decoder *) entropy;
   entropy->pub.start_pass = start_pass_huff_decoder;
   entropy->pub.decode_mcu = decode_mcu;
+  entropy->pub.decode_mcu_flag = decode_mcu_flag;
 
   /* Mark tables unallocated */
   for (i = 0; i < NUM_HUFF_TBLS; i++) {
